@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Little Wins</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@700;800&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <section id="auth-screen" class="auth-screen">
+      <div class="auth-card">
+        <div class="auth-brand">
+          <span class="material-symbols-outlined">smart_toy</span>
+          <span>Little Wins</span>
+        </div>
+        <div class="auth-buddy">
+          <img class="mascot" src="https://lh3.googleusercontent.com/aida/ADBb0uhEtuWWP-FPuExDrVllz54r03Uqbk_s_SSsXB2Eid4w8UeP-URZS1mN06VYoVHEX6T4AwyiNKgBCtlkEeqZZ0OsmClEUK6TThz4GS_2g5vIJWhsicykQN5svKy5dgvTFdBF3Mix7D13vbUsejkgOduns1_NIPqfNs9CYNRzCZ7sTyBVMbJzqhXECFtsU1yGMSj5UdVwEDbQquedBuPoZfMXLzYtOkvz4-BQYGytnkqpy6wzbiV2m09OJCRfiSKM9b5P8SGJ2BAtO-0" alt="Little Wins robot mascot">
+          <div>
+            <p class="eyebrow">Welcome</p>
+            <h1>Set Your Goals</h1>
+            <p class="muted">Save your goals, get quests, and keep your progress with your account.</p>
+          </div>
+        </div>
+
+        <div class="auth-tabs">
+          <button class="auth-tab active" data-auth-tab="login">Log in</button>
+          <button class="auth-tab" data-auth-tab="signup">Sign up</button>
+        </div>
+
+        <form id="login-form" class="auth-form">
+          <label>
+            Email
+            <input name="email" type="email" placeholder="you@example.com" required>
+          </label>
+          <label>
+            Password
+            <input name="password" type="password" placeholder="Password" required>
+          </label>
+          <button class="primary-button" type="submit">Log in</button>
+        </form>
+
+        <form id="signup-form" class="auth-form hidden">
+          <label>
+            Name
+            <input name="fullName" type="text" placeholder="Alex Johnson" required>
+          </label>
+          <label>
+            Email
+            <input name="email" type="email" placeholder="you@example.com" required>
+          </label>
+          <label>
+            Password
+            <input name="password" type="password" minlength="6" placeholder="At least 6 characters" required>
+          </label>
+          <button class="primary-button" type="submit">Create account</button>
+        </form>
+
+        <p id="auth-message" class="muted"></p>
+      </div>
+    </section>
+
+    <header class="topbar app-shell hidden">
+      <button class="brand" data-screen="savings" aria-label="Open savings dashboard">
+        <span class="avatar">
+          <img src="https://lh3.googleusercontent.com/aida-public/AB6AXuBVv43PXYqE7PhaWQ8LzfgjgDjHI2Ljm6jsdPhWt413fvmt7fm-KvkH79TWdRMJLUb_oh0Jgu0Hd9FXRrhinzeFAa5r343m0bShyKMenSoUDV8sPicGX0QthRNfJQNMWC0zyUKkvMsIw7EAiz9znYMLmLUkhhRf7z4JBtrI35CXh0_dp4zsb3Y5guUdyjvEl_hwAJH3DCajb0BvJyUfaqVLfEt2M9DsxfvKGQ4UmN80blBeb_7IAyfUOi5u" alt="User profile">
+        </span>
+        <span>Little Wins</span>
+      </button>
+      <button id="logout-button" class="icon-button" aria-label="Log out">
+        <span class="material-symbols-outlined">logout</span>
+      </button>
+    </header>
+
+    <main class="app-shell hidden">
+      <section id="savings-screen" class="screen active" aria-labelledby="savings-title">
+        <section class="buddy-block">
+          <div class="speech-bubble">
+            <p id="buddy-message">Looking healthy. Your savings are growing like a pro.</p>
+          </div>
+          <img class="mascot large" src="https://lh3.googleusercontent.com/aida/ADBb0uhEtuWWP-FPuExDrVllz54r03Uqbk_s_SSsXB2Eid4w8UeP-URZS1mN06VYoVHEX6T4AwyiNKgBCtlkEeqZZ0OsmClEUK6TThz4GS_2g5vIJWhsicykQN5svKy5dgvTFdBF3Mix7D13vbUsejkgOduns1_NIPqfNs9CYNRzCZ7sTyBVMbJzqhXECFtsU1yGMSj5UdVwEDbQquedBuPoZfMXLzYtOkvz4-BQYGytnkqpy6wzbiV2m09OJCRfiSKM9b5P8SGJ2BAtO-0" alt="Little Wins robot mascot">
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Savings</p>
+              <h1 id="savings-title">Savings Goals</h1>
+            </div>
+            <button id="open-goal-form" class="text-action">Add New</button>
+          </div>
+
+          <form id="goal-form" class="goal-form hidden">
+            <label>
+              Goal name
+              <input id="goal-name" name="name" type="text" placeholder="Emergency fund" required>
+            </label>
+            <div class="two-cols">
+              <label>
+                Target
+                <input id="goal-target" name="target" type="number" min="1" step="1" placeholder="1000" required>
+              </label>
+              <label>
+                Saved
+                <input id="goal-saved" name="saved" type="number" min="0" step="1" placeholder="150">
+              </label>
+            </div>
+            <label>
+              Category
+              <input id="goal-category" name="category" type="text" placeholder="Travel, tech, emergency">
+            </label>
+            <button class="primary-button" type="submit">Save Goal</button>
+          </form>
+
+          <div id="goals-list" class="goal-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">AI Coach</p>
+              <h2>Spending Analysis</h2>
+            </div>
+            <button id="analyse-button" class="primary-button compact">Analyse</button>
+          </div>
+          <p class="muted">Transactions are fetched from Supabase, sent to OpenAI as JSON context, then each transaction category is written back to the database.</p>
+          <div id="analysis-output" class="analysis-output"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Supabase</p>
+              <h2>Transactions</h2>
+            </div>
+            <button id="refresh-transactions" class="text-action">Refresh</button>
+          </div>
+          <div id="transactions-list" class="transaction-list">
+            <article class="transaction-row">
+              <p class="muted">Connect Supabase to preview transaction-table details here.</p>
+            </article>
+          </div>
+        </section>
+      </section>
+
+      <section id="quests-screen" class="screen" aria-labelledby="quests-title">
+        <section class="progress-hero">
+          <img class="mascot hero-mascot" src="https://lh3.googleusercontent.com/aida/ADBb0uhEtuWWP-FPuExDrVllz54r03Uqbk_s_SSsXB2Eid4w8UeP-URZS1mN06VYoVHEX6T4AwyiNKgBCtlkEeqZZ0OsmClEUK6TThz4GS_2g5vIJWhsicykQN5svKy5dgvTFdBF3Mix7D13vbUsejkgOduns1_NIPqfNs9CYNRzCZ7sTyBVMbJzqhXECFtsU1yGMSj5UdVwEDbQquedBuPoZfMXLzYtOkvz4-BQYGytnkqpy6wzbiV2m09OJCRfiSKM9b5P8SGJ2BAtO-0" alt="Little Wins robot mascot">
+          <p class="hero-label">Total Money Saved</p>
+          <strong id="total-saved">$0</strong>
+          <div class="progress-row">
+            <span>Today's Progress</span>
+            <span id="quest-progress-label">0 / 3 Quests</span>
+          </div>
+          <div class="progress-track"><span id="quest-progress-bar"></span></div>
+        </section>
+
+        <div class="section-heading">
+          <div>
+            <h1 id="quests-title">Daily Quests</h1>
+            <p class="muted">Small wins for big savings</p>
+          </div>
+          <span class="pill"><span class="material-symbols-outlined">timer</span> Today</span>
+        </div>
+        <div id="daily-quests" class="quest-list"></div>
+
+        <div class="section-heading gap-top">
+          <div>
+            <h2>Weekly Quests</h2>
+            <p class="muted">Big goals, bigger rewards</p>
+          </div>
+          <span class="pill blue"><span class="material-symbols-outlined">calendar_today</span> This week</span>
+        </div>
+        <div id="weekly-quests" class="quest-list"></div>
+      </section>
+
+      <section id="profile-screen" class="screen profile-screen" aria-labelledby="profile-title">
+        <div class="profile-avatar">
+          <img src="https://lh3.googleusercontent.com/aida-public/AB6AXuBVv43PXYqE7PhaWQ8LzfgjgDjHI2Ljm6jsdPhWt413fvmt7fm-KvkH79TWdRMJLUb_oh0Jgu0Hd9FXRrhinzeFAa5r343m0bShyKMenSoUDV8sPicGX0QthRNfJQNMWC0zyUKkvMsIw7EAiz9znYMLmLUkhhRf7z4JBtrI35CXh0_dp4zsb3Y5guUdyjvEl_hwAJH3DCajb0BvJyUfaqVLfEt2M9DsxfvKGQ4UmN80blBeb_7IAyfUOi5u" alt="Alex Johnson profile">
+        </div>
+        <h1 id="profile-title">Your Profile</h1>
+        <p id="profile-email" class="muted">Signed in</p>
+        <section class="profile-card">
+          <img class="mascot" src="https://lh3.googleusercontent.com/aida/ADBb0uhEtuWWP-FPuExDrVllz54r03Uqbk_s_SSsXB2Eid4w8UeP-URZS1mN06VYoVHEX6T4AwyiNKgBCtlkEeqZZ0OsmClEUK6TThz4GS_2g5vIJWhsicykQN5svKy5dgvTFdBF3Mix7D13vbUsejkgOduns1_NIPqfNs9CYNRzCZ7sTyBVMbJzqhXECFtsU1yGMSj5UdVwEDbQquedBuPoZfMXLzYtOkvz4-BQYGytnkqpy6wzbiV2m09OJCRfiSKM9b5P8SGJ2BAtO-0" alt="Little Wins robot mascot">
+          <p id="profile-message">Ready to help you protect your progress.</p>
+        </section>
+        <section class="settings-list">
+          <button><span class="material-symbols-outlined">person_outline</span> Personal Information <span class="material-symbols-outlined">chevron_right</span></button>
+          <button><span class="material-symbols-outlined">lock</span> Security and PIN <span class="material-symbols-outlined">chevron_right</span></button>
+        </section>
+      </section>
+    </main>
+
+    <nav class="bottom-nav app-shell hidden" aria-label="Main navigation">
+      <button class="nav-item active" data-screen="savings">
+        <span class="material-symbols-outlined">dashboard</span>
+        <span>Dashboard</span>
+      </button>
+      <button class="nav-item" data-screen="quests">
+        <span class="material-symbols-outlined">rocket_launch</span>
+        <span>Quests</span>
+      </button>
+      <button class="nav-item" data-screen="profile">
+        <span class="material-symbols-outlined">person</span>
+        <span>Profile</span>
+      </button>
+    </nav>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
