@@ -117,6 +117,31 @@
           <div id="goals-list" class="goal-list"></div>
         </section>
 
+        <section class="panel bank-panel" aria-labelledby="bank-title">
+          <div class="bank-account-summary">
+            <div class="bank-logo" aria-hidden="true">CBA</div>
+            <div>
+              <p class="eyebrow">Linked bank account</p>
+              <h2 id="bank-title">Commbank Smart Access</h2>
+              <p class="muted">Everyday Account</p>
+            </div>
+          </div>
+          <div class="bank-details">
+            <div>
+              <span>Connection</span>
+              <strong>Active</strong>
+            </div>
+            <div>
+              <span>Last synced</span>
+              <strong>Today, 8:42 am</strong>
+            </div>
+            <div>
+              <span>Available balance</span>
+              <strong>$2,846.70</strong>
+            </div>
+          </div>
+        </section>
+
         <div id="edit-goal-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="edit-goal-title">
           <form id="edit-goal-form" class="edit-goal-modal">
             <div class="section-heading">
@@ -250,6 +275,8 @@
         <span>Profile</span>
       </button>
     </nav>
+
+    <div id="coin-celebration" class="coin-celebration" aria-live="polite" aria-hidden="true"></div>
 
     <script src="/app.js" type="module"></script>
   </body>

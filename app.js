@@ -43,6 +43,7 @@ const elements = {
   weeklyQuests: document.querySelector("#weekly-quests"),
   dailyDayToggle: document.querySelector("#daily-day-toggle"),
   dailyDayLabel: document.querySelector("#daily-day-label"),
+  coinCelebration: document.querySelector("#coin-celebration"),
   totalSaved: document.querySelector("#total-saved"),
   questProgressTitle: document.querySelector("#quest-progress-title"),
   questProgressLabel: document.querySelector("#quest-progress-label"),
@@ -612,6 +613,9 @@ function bindQuestCompletionEvents() {
       saveTotalSavedLittleWinsToSession();
       renderQuests();
       renderTotalSaved();
+      if (!wasComplete && nextCompletion) {
+        showCoinCelebration({ quest, saving });
+      }
 
       try {
         const response = await fetch(`/api/quests/${encodeURIComponent(questId)}`, {
@@ -658,6 +662,52 @@ function updateLocalQuestCompletion(questId, completion) {
     const quest = state.analysis?.[group]?.find((item) => String(item.id) === String(questId));
     if (quest) quest.completion = completion;
   }
+}
+
+function showCoinCelebration({ quest, saving }) {
+  if (!elements.coinCelebration) return;
+
+  const title = quest?.title || "Daily quest complete";
+  const amount = Number(saving || quest?.saving || 0);
+  const coinCount = 16;
+
+  elements.coinCelebration.innerHTML = `
+    <div class="coin-message">
+      <span class="coin-message-icon">$</span>
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${formatMoney(amount)} added to your Little Wins total</span>
+      </div>
+    </div>
+    <div class="coin-stage" aria-hidden="true">
+      ${Array.from({ length: coinCount }, (_, index) => {
+        const left = 8 + ((index * 29) % 84);
+        const delay = (index % 6) * 0.08;
+        const drift = ((index % 5) - 2) * 18;
+        return `<span class="coin" style="--left:${left}%; --delay:${delay}s; --drift:${drift}px">$</span>`;
+      }).join("")}
+    </div>
+  `;
+  elements.coinCelebration.classList.remove("leaving");
+  elements.coinCelebration.classList.add("active");
+  elements.coinCelebration.setAttribute("aria-hidden", "false");
+
+  document.body.classList.add("coin-side-effects");
+  elements.totalSaved.classList.remove("saved-pop");
+  void elements.totalSaved.offsetWidth;
+  elements.totalSaved.classList.add("saved-pop");
+
+  clearTimeout(showCoinCelebration.hideTimer);
+  showCoinCelebration.hideTimer = setTimeout(() => {
+    elements.coinCelebration.classList.add("leaving");
+    document.body.classList.remove("coin-side-effects");
+  }, 3200);
+
+  clearTimeout(showCoinCelebration.removeTimer);
+  showCoinCelebration.removeTimer = setTimeout(() => {
+    elements.coinCelebration.classList.remove("active", "leaving");
+    elements.coinCelebration.setAttribute("aria-hidden", "true");
+  }, 3900);
 }
 
 function renderTotalSaved() {
