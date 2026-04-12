@@ -1,6 +1,7 @@
 # Little Wins
+Contributers: Aathmika Gokula Krishna, Koko Mclaughlin, Fatima Rana, Anika Nagarajan
 
-Mobile-friendly savings coach app built from the hackathon UX files.
+Financial budgetting app designed to analyse the user's past transactions and create personalised savings goals / challenges.
 
 ## What It Does
 
