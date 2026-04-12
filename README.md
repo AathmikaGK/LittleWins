@@ -11,8 +11,8 @@ Mobile-friendly savings coach app built from the hackathon UX files.
 - Writes the finalized transaction category back into the Supabase `category` column.
 - Saves generated daily and weekly quests to the Supabase `quest` table.
 - Lets users tick quest completion checkboxes, updating `completion` in Supabase.
-- Supports Supabase Auth sign up and login.
-- Saves each user's savings goal rows to the Supabase `user` table.
+- Supports local sign up and login with JWT tokens.
+- Saves each user's dashboard goals in a local JSON user store.
 - Displays the AI response in this JSON shape:
 
 ```json
@@ -72,38 +72,12 @@ http://localhost:3000
 
 ## Supabase Notes
 
-For the verification login flow, keep email confirmation enabled in Supabase:
-
-```text
-Authentication -> Providers -> Email -> Confirm email -> On
-```
-
-Then configure the confirmation redirect:
-
-```text
-Authentication -> URL Configuration -> Site URL -> http://localhost:3000
-Authentication -> URL Configuration -> Redirect URLs -> http://localhost:3000
-```
-
-If you run on another port, add that too, for example:
-
-```text
-http://localhost:3001
-```
-
-In the Supabase email template, use the built-in confirmation URL:
-
-```html
-<a href="{{ .ConfirmationURL }}">Confirm your email</a>
-```
-
-Do not use a custom URL with `token_hash={{ .TokenHash }}` unless the app has a matching `/auth/confirm` handler. A bad custom template is the usual cause of links ending in `invalid/null`.
+Authentication is local and uses JWT tokens. Supabase is still used for transactions and quest rows, but not for sign up/login.
 
 The default table and column names are:
 
 - Table: `transactions`
 - Quest table: `quest`
-- User savings goals table: `user`
 - ID column: `id`
 - Category column: `category`
 
@@ -112,16 +86,15 @@ If your schema uses different names, update these values in `.env`:
 ```text
 SUPABASE_TRANSACTIONS_TABLE=transactions
 SUPABASE_QUESTS_TABLE=quest
-SUPABASE_USERS_TABLE=user
 SUPABASE_TRANSACTION_ID_COLUMN=id
 SUPABASE_TRANSACTION_CATEGORY_COLUMN=category
 APP_USER_ID=00000000-0000-0000-0000-000000000000
 SITE_URL=http://localhost:3000
+JWT_SECRET=change-this-local-jwt-secret
+LOCAL_USERS_FILE=local_users.json
 ```
 
 Use `SUPABASE_SERVICE_ROLE_KEY` only on the server. It is intentionally not exposed to the browser.
-
-Run [supabase_user_table.sql](/Users/kokomclaughlin/Desktop/LittleWins/FinanceBuddy/supabase_user_table.sql) in the Supabase SQL editor to create the user savings-goals table.
 
 Run [supabase_quest_table.sql](/Users/kokomclaughlin/Desktop/LittleWins/FinanceBuddy/supabase_quest_table.sql) in the Supabase SQL editor to create the quest table.
 

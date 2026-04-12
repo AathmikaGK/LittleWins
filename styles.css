@@ -483,6 +483,14 @@ input {
   accent-color: var(--secondary);
 }
 
+.quest-tracker-note {
+  margin: 0;
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
 .analysis-card {
   display: grid;
   gap: 12px;

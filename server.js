@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
+import { createHmac, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 
 const root = resolve(".");
 loadEnv();
@@ -15,10 +16,13 @@ const config = {
   transactionsTable: process.env.SUPABASE_TRANSACTIONS_TABLE || "transactions",
   questsTable: process.env.SUPABASE_QUESTS_TABLE || "quest",
   usersTable: process.env.SUPABASE_USERS_TABLE || "user",
+  userIdColumn: process.env.SUPABASE_USER_ID_COLUMN || "user_id",
   transactionIdColumn: process.env.SUPABASE_TRANSACTION_ID_COLUMN || "id",
   transactionCategoryColumn: process.env.SUPABASE_TRANSACTION_CATEGORY_COLUMN || "category",
   maxTransactionsForAnalysis: Number(process.env.MAX_TRANSACTIONS_FOR_ANALYSIS || 75),
   appUserId: normalizeOptionalUuid(process.env.APP_USER_ID || ""),
+  jwtSecret: cleanEnvValue(process.env.JWT_SECRET || "little-wins-dev-secret-change-me"),
+  localUsersFile: resolve(join(root, cleanEnvValue(process.env.LOCAL_USERS_FILE || "local_users.json"))),
   openaiApiKey: process.env.OPENAI_API_KEY || "",
   openaiModel: cleanEnvValue(process.env.OPENAI_MODEL || "gpt-4o-mini")
 };
@@ -59,38 +63,23 @@ const server = createServer(async (request, response) => {
     if (url.pathname === "/api/auth/signup" && request.method === "POST") {
       const body = await readJson(request);
       const auth = await signUp(body);
-      const user = auth.user || auth.session?.user;
-      if (user) {
-        await upsertUserProfile({
-          authUserId: user.id,
-          email: user.email || body.email,
-          fullName: body.fullName
-        });
-      }
       return sendJson(response, {
-        user,
-        needsConfirmation: !auth.session,
-        message: auth.session ? "Account created. Log in to continue." : "Account created. Confirm your email, then log in."
+        user: auth.user,
+        needsConfirmation: false,
+        message: "Account created. Log in now."
       });
     }
 
     if (url.pathname === "/api/auth/login" && request.method === "POST") {
       const body = await readJson(request);
       const auth = await login(body);
-      if (auth.user) {
-        await upsertUserProfile({
-          authUserId: auth.user.id,
-          email: auth.user.email || body.email,
-          fullName: auth.user.user_metadata?.full_name || body.fullName || ""
-        });
-      }
       return sendJson(response, auth);
     }
 
     if (url.pathname === "/api/user-goals" && request.method === "GET") {
       const authUser = await getAuthenticatedUser(request);
-      const goals = await fetchUserGoals(authUser.id);
-      return sendJson(response, { goals });
+      const userGoals = await fetchUserGoals(authUser.id);
+      return sendJson(response, userGoals);
     }
 
     if (url.pathname === "/api/user-goals" && request.method === "POST") {
@@ -117,6 +106,7 @@ const server = createServer(async (request, response) => {
     if (url.pathname === "/api/analyse" && request.method === "POST") {
       const body = await readJson(request);
       const authUser = await getOptionalAuthenticatedUser(request);
+      if (authUser?.id) await ensureUserSynced(authUser.id);
       const transactions = await fetchTransactions();
       const result = await analyseTransactions(transactions, body?.goals || []);
       const categorizedTransactions = normalizeCategorizedTransactions(
@@ -139,8 +129,9 @@ const server = createServer(async (request, response) => {
     if (url.pathname.startsWith("/api/quests/") && request.method === "PATCH") {
       const id = decodeURIComponent(url.pathname.replace("/api/quests/", ""));
       const body = await readJson(request);
-      const quest = await updateQuestCompletion(id, Boolean(body?.completion));
-      return sendJson(response, { quest });
+      const authUser = await getOptionalAuthenticatedUser(request);
+      const result = await updateQuestCompletion(id, Boolean(body?.completion), authUser?.id);
+      return sendJson(response, result);
     }
 
     return serveStatic(url.pathname, response);
@@ -192,91 +183,76 @@ async function fetchTransactions() {
 }
 
 async function signUp(body) {
-  assertSupabaseConfig();
   if (!body?.email || !body?.password) {
     throw new Error("Email and password are required.");
   }
 
-  const redirectTo = encodeURIComponent(config.siteUrl || "http://localhost:3000");
-  const response = await fetch(`${config.supabaseUrl}/auth/v1/signup?redirect_to=${redirectTo}`, {
-    method: "POST",
-    headers: supabaseAuthHeaders(),
-    body: JSON.stringify({
-      email: String(body.email).trim(),
-      password: String(body.password),
-      data: {
-        full_name: String(body.fullName || "").trim()
-      }
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Supabase sign up failed: ${response.status} ${await response.text()}`);
+  const db = await readLocalUsersDb();
+  const email = normalizeEmail(body.email);
+  if (db.users.some((user) => user.user_email === email)) {
+    throw new Error("An account with this email already exists.");
   }
 
-  return response.json();
+  const now = new Date().toISOString();
+  const password = hashPassword(String(body.password));
+  const user = {
+    userid: randomUUID(),
+    user_email: email,
+    password_hash: password.hash,
+    password_salt: password.salt,
+    full_name: String(body.fullName || "").trim(),
+    savings_goal_id: [],
+    savings_goal_name: [],
+    savings_goal_amount: [],
+    savings_goal_saved: [],
+    Total_saved_littlewins: 0,
+    created_at: now,
+    updated_at: now
+  };
+
+  db.users.push(user);
+  await writeLocalUsersDb(db);
+  await syncUserToSupabase(user);
+  return { user: publicUser(user) };
 }
 
 async function upsertUserProfile({ authUserId, email, fullName }) {
-  assertSupabaseConfig();
   if (!authUserId) throw new Error("A Supabase auth user id is required.");
 
-  const existingRows = await fetchUserRows(authUserId);
-  if (existingRows.length) {
-    return updateUserProfile(existingRows[0].id, { email, fullName });
-  }
-
-  return saveUserGoal({
-    authUserId,
-    email,
-    fullName,
-    goalName: "First savings goal",
-    goalAmount: 0,
-    goalSaved: 0
-  });
+  return updateUserProfile(authUserId, { email, fullName });
 }
 
-async function updateUserProfile(id, { email, fullName }) {
-  const response = await fetch(`${config.supabaseUrl}/rest/v1/${encodeURIComponent(config.usersTable)}?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: {
-      ...supabaseHeaders(),
-      prefer: "return=representation"
-    },
-    body: JSON.stringify({
-      email: String(email || ""),
-      full_name: String(fullName || "")
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Supabase user profile update failed: ${response.status} ${await response.text()}`);
-  }
-
-  const rows = await response.json();
-  return rows[0];
+async function updateUserProfile(authUserId, { email, fullName }) {
+  const db = await readLocalUsersDb();
+  const user = db.users.find((item) => item.userid === authUserId);
+  if (!user) return null;
+  user.user_email = normalizeEmail(email || user.user_email);
+  user.full_name = String(fullName || user.full_name || "");
+  user.updated_at = new Date().toISOString();
+  await writeLocalUsersDb(db);
+  await syncUserToSupabase(user);
+  return publicUser(user);
 }
 
 async function login(body) {
-  assertSupabaseConfig();
   if (!body?.email || !body?.password) {
     throw new Error("Email and password are required.");
   }
 
-  const response = await fetch(`${config.supabaseUrl}/auth/v1/token?grant_type=password`, {
-    method: "POST",
-    headers: supabaseAuthHeaders(),
-    body: JSON.stringify({
-      email: String(body.email).trim(),
-      password: String(body.password)
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Supabase login failed: ${response.status} ${await response.text()}`);
+  const db = await readLocalUsersDb();
+  const user = db.users.find((item) => item.user_email === normalizeEmail(body.email));
+  if (!user || !verifyPassword(String(body.password), user)) {
+    throw new Error("Invalid email or password.");
   }
 
-  return response.json();
+  await syncUserToSupabase(user);
+
+  return {
+    access_token: createJwt(user),
+    token_type: "bearer",
+    expires_in: 60 * 60 * 24 * 7,
+    user: publicUser(user)
+  };
 }
 
 async function getAuthenticatedUser(request) {
@@ -290,86 +266,84 @@ async function getOptionalAuthenticatedUser(request) {
   const token = authorization.replace(/^Bearer\s+/i, "").trim();
   if (!token) return null;
 
-  const response = await fetch(`${config.supabaseUrl}/auth/v1/user`, {
-    headers: supabaseAuthHeaders(token)
-  });
-
-  if (!response.ok) return null;
-  return response.json();
+  try {
+    const payload = verifyJwt(token);
+    const db = await readLocalUsersDb();
+    const user = db.users.find((item) => item.userid === payload.sub);
+    return user ? publicUser(user) : null;
+  } catch {
+    return null;
+  }
 }
 
 async function fetchUserGoals(authUserId) {
-  assertSupabaseConfig();
   const rows = await fetchUserRows(authUserId);
-  return rows.filter((row) => row.savings_goal_name !== "First savings goal" || Number(row.savings_goal_amount || 0) > 0).map(userGoalRowToGoal);
+  return rows[0] ? {
+    goals: goalsFromUserRow(rows[0]),
+    totalSavedLittleWins: Number(rows[0].Total_saved_littlewins || 0)
+  } : { goals: [], totalSavedLittleWins: 0 };
 }
 
 async function fetchUserRows(authUserId) {
-  const url = `${config.supabaseUrl}/rest/v1/${encodeURIComponent(config.usersTable)}?auth_user_id=eq.${encodeURIComponent(authUserId)}&select=*&order=created_at.desc`;
-  const response = await fetch(url, {
-    headers: supabaseHeaders()
-  });
-
-  if (!response.ok) {
-    throw new Error(`Supabase user goals fetch failed: ${response.status} ${await response.text()}`);
-  }
-
-  return response.json();
+  const db = await readLocalUsersDb();
+  return db.users.filter((user) => user.userid === authUserId);
 }
 
 async function saveUserGoal({ authUserId, email, fullName, goalName, goalAmount, goalSaved }) {
-  assertSupabaseConfig();
-  if (!authUserId) throw new Error("A Supabase auth user id is required.");
+  if (!authUserId) throw new Error("A user id is required.");
 
-  const body = {
-    auth_user_id: authUserId,
-    email: String(email || ""),
-    full_name: String(fullName || ""),
-    savings_goal_name: String(goalName || "Savings goal"),
-    savings_goal_amount: Number(goalAmount || 0),
-    savings_goal_saved: Number(goalSaved || 0)
+  const db = await readLocalUsersDb();
+  const user = db.users.find((item) => item.userid === authUserId);
+  if (!user) throw new Error("User not found.");
+  const goal = {
+    id: randomUUID(),
+    name: String(goalName || "Savings goal"),
+    category: "Savings",
+    target: Number(goalAmount || 0),
+    saved: Number(goalSaved || 0),
+    icon: "savings"
   };
 
-  const response = await fetch(`${config.supabaseUrl}/rest/v1/${encodeURIComponent(config.usersTable)}`, {
-    method: "POST",
-    headers: {
-      ...supabaseHeaders(),
-      prefer: "return=representation"
-    },
-    body: JSON.stringify(body)
-  });
+  user.user_email = normalizeEmail(email || user.user_email);
+  user.full_name = String(fullName || user.full_name || "");
+  user.savings_goal_id.unshift(goal.id);
+  user.savings_goal_name.unshift(goal.name);
+  user.savings_goal_amount.unshift(goal.target);
+  user.savings_goal_saved.unshift(goal.saved);
+  user.updated_at = new Date().toISOString();
+  await writeLocalUsersDb(db);
+  await syncUserToSupabase(user);
 
-  if (!response.ok) {
-    throw new Error(`Supabase user goal save failed: ${response.status} ${await response.text()}`);
-  }
-
-  const rows = await response.json();
-  return userGoalRowToGoal(rows[0]);
+  return goal;
 }
 
 async function deleteUserGoal(authUserId, id) {
-  assertSupabaseConfig();
-  const response = await fetch(`${config.supabaseUrl}/rest/v1/${encodeURIComponent(config.usersTable)}?id=eq.${encodeURIComponent(id)}&auth_user_id=eq.${encodeURIComponent(authUserId)}`, {
-    method: "DELETE",
-    headers: supabaseHeaders(true)
-  });
-
-  if (!response.ok) {
-    throw new Error(`Supabase user goal delete failed: ${response.status} ${await response.text()}`);
-  }
+  const db = await readLocalUsersDb();
+  const user = db.users.find((item) => item.userid === authUserId);
+  if (!user) throw new Error("User not found.");
+  const index = user.savings_goal_id.findIndex((goalId) => String(goalId) === String(id));
+  if (index === -1) return;
+  user.savings_goal_id.splice(index, 1);
+  user.savings_goal_name.splice(index, 1);
+  user.savings_goal_amount.splice(index, 1);
+  user.savings_goal_saved.splice(index, 1);
+  user.updated_at = new Date().toISOString();
+  await writeLocalUsersDb(db);
+  await syncUserToSupabase(user);
 }
 
-function userGoalRowToGoal(row) {
-  return {
-    id: row.id,
-    name: row.savings_goal_name,
+function goalsFromUserRow(row) {
+  const goals = normalizeGoalLists(row);
+  return goals.savings_goal_name.map((name, index) => ({
+    id: goals.savings_goal_id[index],
+    name: String(name || "Savings goal"),
     category: "Savings",
-    target: Number(row.savings_goal_amount || 0),
-    saved: Number(row.savings_goal_saved || 0),
+    target: goals.savings_goal_amount[index],
+    saved: goals.savings_goal_saved[index],
     icon: "savings",
-    email: row.email,
+    email: row.user_email,
     fullName: row.full_name
-  };
+  }));
 }
 
 async function analyseTransactions(transactions, goals) {
@@ -447,12 +421,31 @@ Use the 50/30/20 budget rule:
 
 Determine whether spending is unnecessary or excessive proportionate to the user's income. Estimate income from transactions categorized as Income, salary, pay, wages, transfer in, or deposits that appear to be income. If income is unclear, say that in the summary and judge unnecessary spending by frequency and category pattern.
 When generating daily and weekly quests, make the tasks help the user move toward saving 20% of income. Quests should reduce unnecessary wants or redirect a specific amount toward savings.
+Quest saving amounts must be realistic and based on the transaction data:
+- Daily quest savings should represent what the user can plausibly save in one day by skipping or reducing that behavior once or twice.
+- Weekly quest savings can represent several repeated choices across a week, but should not exceed the user's weekly spending pattern for that category.
+- Use observed average transaction amounts when possible. For example, if coffee transactions are usually $4-$8, a daily "skip coffee" quest should save about $5-$8, not $20.
+- A daily coffee quest should almost never exceed $10 unless the transaction data clearly shows individual coffee purchases above $10.
+- A daily eating-out quest should usually be $15-$30 depending on the user's meal transactions.
+- Subscription review quests should use a realistic subscription cost, not a made-up large amount.
+- Do not make one daily quest account for a full week's or full month's savings.
+- Keep each quest saving lower than or equal to the amount the user could actually avoid by completing that specific task.
+Daily and weekly quests must be linked by category:
+- Create daily quests as the actions the user can complete today.
+- Create weekly quests as read-only trackers for the same categories, not separate user-editable actions.
+- For example, a daily quest "Skip coffee today" in category "Coffee" should connect to a weekly quest like "Limit coffee purchases" in category "Coffee".
+- Weekly quest savings should be the realistic total for completing the linked daily action multiple times in a week.
+- Weekly quest titles and reasons should describe the weekly target, while daily quest titles and reasons should describe today's action.
 
 Category rules:
 - Use plain category names such as Coffee, Eating out, Groceries, Transport, Rent or mortgage, Utilities, Subscriptions, Shopping, Entertainment, Income, Health, Education, Travel, or Other.
+- Categorise Translink as Travel.
+- Categorise restaurants and fast food as Eating out, including Sushi Hub, Sushi Train, Grill'd, Noodle Box, Guzman y Gomez, Subway, McDonald's, KFC, pizza shops, takeaway, food delivery, Uber Eats, and DoorDash.
+- Categorise Target, Kmart, Big W, Amazon, department stores, and general retail purchases as Shopping.
 - Do not mark rent, mortgage, loan repayments, utilities, or income as excessive spending.
 - Excessive spending should focus on controllable recurring habits, especially coffee, eating out, rideshares, subscriptions, shopping, and entertainment. Groceries are a need, but can be mentioned only if there is evidence of unusually high or repeated non-essential grocery spending.
 - Daily and weekly goals must be specific, measurable, realistic, and tied to the recurring spending habits you identify.
+- Return weekly goals only for categories that also appear in daily goals.
 - Return 2 to 5 excessive categories at most.
 - Return 2 to 4 daily goals and 2 to 4 weekly goals.
 
@@ -561,7 +554,7 @@ async function saveGeneratedQuests(analysis, authUserId) {
 
 function normalizeQuestRows(quests, questType, authUserId) {
   return (Array.isArray(quests) ? quests : []).map((quest) => ({
-    user_id: config.appUserId || authUserId || null,
+    user_id: authUserId || null,
     quest_type: questType,
     title: String(quest.title || "Little win"),
     saving: Number(quest.saving || 0),
@@ -587,9 +580,22 @@ function mergeSavedQuestRows(quests, savedRows) {
   }));
 }
 
-async function updateQuestCompletion(id, completion) {
+async function updateQuestCompletion(id, completion, authUserId) {
   assertSupabaseConfig();
   if (!id) throw new Error("Quest id is required.");
+
+  const existingResponse = await fetch(`${config.supabaseUrl}/rest/v1/${encodeURIComponent(config.questsTable)}?id=eq.${encodeURIComponent(id)}&select=id,saving,completion`, {
+    headers: supabaseHeaders()
+  });
+
+  if (!existingResponse.ok) {
+    throw new Error(`Supabase quest fetch failed: ${existingResponse.status} ${await existingResponse.text()}`);
+  }
+
+  const existingRows = await existingResponse.json();
+  const existingQuest = existingRows[0] || null;
+  const wasComplete = Boolean(existingQuest?.completion);
+  const saving = Number(existingQuest?.saving || 0);
 
   const response = await fetch(`${config.supabaseUrl}/rest/v1/${encodeURIComponent(config.questsTable)}?id=eq.${encodeURIComponent(id)}`, {
     method: "PATCH",
@@ -605,7 +611,10 @@ async function updateQuestCompletion(id, completion) {
   }
 
   const rows = await response.json();
-  return rows[0] || null;
+  const quest = rows[0] || null;
+  const delta = completion === wasComplete ? 0 : completion ? saving : -saving;
+  const totalSavedLittleWins = authUserId ? await updateLittleWinsSavings(authUserId, delta) : null;
+  return { quest, totalSavedLittleWins };
 }
 
 async function updateTransactionCategories(categorizedTransactions) {
@@ -676,31 +685,56 @@ function normalizeAnalysis(result) {
       savings_target: Number(excessive.savings_target || 0),
       categories: Array.isArray(excessive.categories) ? excessive.categories : []
     },
-    "daily goals": normalizeQuestAnalysis(result["daily goals"]),
-    "weekly goals": normalizeQuestAnalysis(result["weekly goals"])
+    "daily goals": normalizeQuestAnalysis(result["daily goals"], "daily"),
+    "weekly goals": normalizeQuestAnalysis(result["weekly goals"], "weekly")
   };
 }
 
-function normalizeQuestAnalysis(quests) {
+function normalizeQuestAnalysis(quests, questType) {
   return (Array.isArray(quests) ? quests : []).map((quest) => ({
     title: String(quest.title || "Little win"),
-    saving: Number(quest.saving || 0),
+    saving: normalizeQuestSaving(quest, questType),
     category: String(quest.category || "Savings"),
     reason: String(quest.reason || ""),
     completion: Boolean(quest.completion)
   }));
 }
 
+function normalizeQuestSaving(quest, questType) {
+  const category = String(quest.category || "").toLowerCase();
+  const rawSaving = Number(quest.saving || 0);
+  const dailyCaps = [
+    [["coffee", "cafe"], 10],
+    [["eating", "restaurant", "takeaway"], 30],
+    [["subscription"], 15],
+    [["transport", "rideshare", "uber"], 25],
+    [["shopping", "entertainment", "hobbies"], 35]
+  ];
+  const weeklyCaps = [
+    [["coffee", "cafe"], 35],
+    [["eating", "restaurant", "takeaway"], 90],
+    [["subscription"], 40],
+    [["transport", "rideshare", "uber"], 70],
+    [["shopping", "entertainment", "hobbies"], 100]
+  ];
+  const caps = questType === "weekly" ? weeklyCaps : dailyCaps;
+  const matchedCap = caps.find(([terms]) => terms.some((term) => category.includes(term)))?.[1];
+  const defaultCap = questType === "weekly" ? 75 : 25;
+  const cap = matchedCap || defaultCap;
+  return Math.max(0, Math.min(rawSaving, cap));
+}
+
 function inferCategory(transaction) {
   const text = Object.values(transaction).join(" ").toLowerCase();
   const checks = [
     ["Coffee", ["coffee", "cafe", "espresso", "starbucks"]],
-    ["Eating out", ["restaurant", "mcdonald", "kfc", "uber eats", "doordash", "pizza"]],
+    ["Eating out", ["restaurant", "mcdonald", "mcdonalds", "kfc", "uber eats", "doordash", "pizza", "sushi hub", "sushi train", "grill'd", "grilld", "noodle box", "guzman y gomez", "guzman", "subway", "takeaway", "fast food"]],
     ["Groceries", ["grocery", "supermarket", "woolworths", "coles", "aldi"]],
+    ["Travel", ["translink"]],
     ["Transport", ["uber", "lyft", "taxi", "bus", "train", "transport"]],
     ["Rent or mortgage", ["rent", "mortgage"]],
     ["Subscriptions", ["netflix", "spotify", "subscription", "apple.com/bill"]],
-    ["Shopping", ["amazon", "target", "kmart", "shopping"]],
+    ["Shopping", ["amazon", "target", "kmart", "big w", "department store", "retail", "shopping"]],
     ["Utilities", ["electric", "water", "gas", "internet", "phone"]]
   ];
 
@@ -739,14 +773,6 @@ function supabaseHeaders(preferRepresentation = false) {
   };
 }
 
-function supabaseAuthHeaders(accessToken = config.supabaseAnonKey) {
-  return {
-    apikey: config.supabaseAnonKey,
-    authorization: `Bearer ${accessToken}`,
-    "content-type": "application/json"
-  };
-}
-
 function assertSupabaseConfig() {
   if (!config.supabaseUrl || !config.supabaseAnonKey) {
     throw new Error("Supabase is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY to .env.");
@@ -763,6 +789,205 @@ async function readJson(request) {
 function sendJson(response, body, status = 200) {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
+}
+
+async function readLocalUsersDb() {
+  try {
+    const text = await readFile(config.localUsersFile, "utf8");
+    const parsed = JSON.parse(text);
+    return {
+      users: Array.isArray(parsed.users) ? parsed.users.map(normalizeStoredUser) : []
+    };
+  } catch {
+    return { users: [] };
+  }
+}
+
+async function writeLocalUsersDb(db) {
+  await writeFile(config.localUsersFile, `${JSON.stringify({ users: db.users.map(normalizeStoredUser) }, null, 2)}\n`);
+}
+
+async function syncUserToSupabase(user) {
+  if (!config.supabaseUrl || !config.supabaseAnonKey) return;
+
+  const normalizedUser = normalizeStoredUser(user);
+  const response = await fetch(`${config.supabaseUrl}/rest/v1/${encodeURIComponent(config.usersTable)}?on_conflict=${encodeURIComponent(config.userIdColumn)}`, {
+    method: "POST",
+    headers: {
+      ...supabaseHeaders(),
+      prefer: "resolution=merge-duplicates,return=minimal"
+    },
+    body: JSON.stringify({
+      [config.userIdColumn]: normalizedUser.userid,
+      user_email: normalizedUser.user_email,
+      password_hash: normalizedUser.password_hash,
+      password_salt: normalizedUser.password_salt,
+      full_name: normalizedUser.full_name,
+      savings_goal_id: normalizedUser.savings_goal_id,
+      savings_goal_name: normalizedUser.savings_goal_name,
+      savings_goal_amount: normalizedUser.savings_goal_amount,
+      savings_goal_saved: normalizedUser.savings_goal_saved,
+      Total_saved_littlewins: normalizedUser.Total_saved_littlewins,
+      created_at: normalizedUser.created_at,
+      updated_at: normalizedUser.updated_at
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Supabase user sync failed: ${response.status} ${await response.text()}`);
+  }
+}
+
+async function ensureUserSynced(authUserId) {
+  const db = await readLocalUsersDb();
+  const user = db.users.find((item) => item.userid === authUserId);
+  if (user) await syncUserToSupabase(user);
+}
+
+async function updateLittleWinsSavings(authUserId, delta) {
+  if (!authUserId || !Number.isFinite(Number(delta)) || Number(delta) === 0) {
+    const db = await readLocalUsersDb();
+    const user = db.users.find((item) => item.userid === authUserId);
+    return Number(user?.Total_saved_littlewins || 0);
+  }
+
+  const db = await readLocalUsersDb();
+  const user = db.users.find((item) => item.userid === authUserId);
+  if (!user) return 0;
+
+  const nextTotal = Math.max(0, Number(user.Total_saved_littlewins || 0) + Number(delta));
+  user.Total_saved_littlewins = nextTotal;
+  user.updated_at = new Date().toISOString();
+  await writeLocalUsersDb(db);
+  await syncUserToSupabase(user);
+  return nextTotal;
+}
+
+function normalizeStoredUser(user) {
+  const goals = normalizeGoalLists(user);
+  return {
+    userid: String(user.userid || user.user_id || randomUUID()),
+    user_email: normalizeEmail(user.user_email || user.email || ""),
+    password_hash: String(user.password_hash || ""),
+    password_salt: String(user.password_salt || ""),
+    full_name: String(user.full_name || ""),
+    savings_goal_id: goals.savings_goal_id,
+    savings_goal_name: goals.savings_goal_name,
+    savings_goal_amount: goals.savings_goal_amount,
+    savings_goal_saved: goals.savings_goal_saved,
+    Total_saved_littlewins: toMoneyNumber(user.Total_saved_littlewins),
+    created_at: user.created_at || new Date().toISOString(),
+    updated_at: user.updated_at || new Date().toISOString()
+  };
+}
+
+function normalizeGoalLists(user) {
+  const ids = Array.isArray(user.savings_goal_id) ? user.savings_goal_id : [];
+  const names = Array.isArray(user.savings_goal_name) ? user.savings_goal_name : [];
+  const amounts = Array.isArray(user.savings_goal_amount) ? user.savings_goal_amount : [];
+  const savedAmounts = Array.isArray(user.savings_goal_saved) ? user.savings_goal_saved : [];
+  const goalCount = Math.max(ids.length, names.length, amounts.length, savedAmounts.length);
+  const goals = {
+    savings_goal_id: [],
+    savings_goal_name: [],
+    savings_goal_amount: [],
+    savings_goal_saved: []
+  };
+
+  for (let index = 0; index < goalCount; index += 1) {
+    const name = String(names[index] || "").trim();
+    const amount = toMoneyNumber(amounts[index]);
+    const saved = toMoneyNumber(savedAmounts[index]);
+    if (!name && amount === 0 && saved === 0) continue;
+
+    goals.savings_goal_id.push(String(ids[index] || randomUUID()));
+    goals.savings_goal_name.push(name || "Savings goal");
+    goals.savings_goal_amount.push(amount);
+    goals.savings_goal_saved.push(saved);
+  }
+
+  return goals;
+}
+
+function toMoneyNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function publicUser(user) {
+  return {
+    id: user.userid,
+    email: user.user_email,
+    Total_saved_littlewins: Number(user.Total_saved_littlewins || 0),
+    user_metadata: {
+      full_name: user.full_name || user.user_email.split("@")[0]
+    }
+  };
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function hashPassword(password, salt = randomBytes(16).toString("hex")) {
+  return {
+    salt,
+    hash: pbkdf2Sync(password, salt, 120000, 32, "sha256").toString("hex")
+  };
+}
+
+function verifyPassword(password, user) {
+  if (!user.password_hash || !user.password_salt) return false;
+  const attempted = Buffer.from(hashPassword(password, user.password_salt).hash, "hex");
+  const stored = Buffer.from(user.password_hash, "hex");
+  return attempted.length === stored.length && timingSafeEqual(attempted, stored);
+}
+
+function createJwt(user) {
+  const now = Math.floor(Date.now() / 1000);
+  return signJwt({
+    sub: user.userid,
+    email: user.user_email,
+    iat: now,
+    exp: now + 60 * 60 * 24 * 7
+  });
+}
+
+function signJwt(payload) {
+  const header = base64UrlEncode(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const body = base64UrlEncode(JSON.stringify(payload));
+  const signature = jwtSignature(`${header}.${body}`);
+  return `${header}.${body}.${signature}`;
+}
+
+function verifyJwt(token) {
+  const parts = token.split(".");
+  if (parts.length !== 3) throw new Error("Invalid token.");
+  const [header, body, signature] = parts;
+  const expected = jwtSignature(`${header}.${body}`);
+  const actual = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (actual.length !== expectedBuffer.length || !timingSafeEqual(actual, expectedBuffer)) {
+    throw new Error("Invalid token signature.");
+  }
+
+  const payload = JSON.parse(base64UrlDecode(body));
+  if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+    throw new Error("Token expired.");
+  }
+  return payload;
+}
+
+function jwtSignature(value) {
+  return createHmac("sha256", config.jwtSecret).update(value).digest("base64url");
+}
+
+function base64UrlEncode(value) {
+  return Buffer.from(value).toString("base64url");
+}
+
+function base64UrlDecode(value) {
+  return Buffer.from(value, "base64url").toString("utf8");
 }
 
 function loadEnv() {

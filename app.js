@@ -1,8 +1,3 @@
-const defaultGoals = [
-  { id: crypto.randomUUID(), name: "New Macbook Pro", category: "Electronics and Tech", target: 1800, saved: 1170, icon: "laptop_mac" },
-  { id: crypto.randomUUID(), name: "Summer Trip", category: "Travel", target: 2500, saved: 750, icon: "flight" }
-];
-
 const fallbackDailyGoals = [
   { title: "No Coffee Today", saving: 5, category: "Coffee", reason: "Brew at home and keep the small win." },
   { title: "Grocery List Only", saving: 10, category: "Groceries", reason: "Buy only what is on the list." }
@@ -16,7 +11,8 @@ const fallbackWeeklyGoals = [
 const state = {
   session: loadSession(),
   user: null,
-  goals: loadGoals(),
+  goals: [],
+  totalSavedLittleWins: Number(loadSession()?.user?.Total_saved_littlewins || 0),
   analysis: null
 };
 
@@ -155,6 +151,9 @@ async function signup(event) {
       auth: false
     });
 
+    state.goals = [];
+    state.totalSavedLittleWins = 0;
+    saveGoals();
     showAuthTab("login");
     setAuthMessage(payload.needsConfirmation
       ? "Account created. Confirm your email, then log in."
@@ -168,6 +167,7 @@ function logout() {
   state.session = null;
   state.user = null;
   state.goals = [];
+  state.totalSavedLittleWins = 0;
   localStorage.removeItem("little-wins-session");
   localStorage.removeItem("little-wins-goals");
   renderAuthState();
@@ -175,6 +175,7 @@ function logout() {
 }
 
 function setSession(payload) {
+  state.totalSavedLittleWins = Number(payload.user?.Total_saved_littlewins || 0);
   state.session = {
     access_token: payload.access_token,
     refresh_token: payload.refresh_token,
@@ -250,9 +251,8 @@ function renderQuests() {
   elements.weeklyQuests.innerHTML = weeklyGoals.map((goal, index) => questCard(goal, index, true)).join("");
   bindQuestCompletionEvents();
 
-  const allGoals = [...dailyGoals, ...weeklyGoals];
-  const completed = allGoals.filter((goal) => goal.completion).length;
-  const total = allGoals.length || 3;
+  const completed = dailyGoals.filter((goal) => goal.completion).length;
+  const total = dailyGoals.length || 1;
   const progress = Math.round((completed / total) * 100);
   elements.questProgressLabel.textContent = `${completed} / ${total} Quests`;
   elements.questProgressBar.style.setProperty("--progress", `${progress}%`);
@@ -267,12 +267,9 @@ function questCard(goal, index, weekly) {
   const icon = iconForCategory(category);
   const checked = goal.completion ? "checked" : "";
   const disabled = goal.id ? "" : "disabled";
-  const progressLabel = weekly
-    ? `${goal.completion ? 1 : 0} / 7 Days`
-    : goal.completion ? "1 / 1" : "0 / 1";
-  const progressValue = weekly
-    ? `${goal.completion ? Math.round((1 / 7) * 100) : 0}%`
-    : goal.completion ? "100%" : "0%";
+  const weeklyProgress = weekly ? linkedWeeklyProgress(goal) : null;
+  const progressLabel = weekly ? weeklyProgress.label : goal.completion ? "1 / 1" : "0 / 1";
+  const progressValue = weekly ? weeklyProgress.progress : goal.completion ? "100%" : "0%";
 
   return `
     <article class="quest-card ${goal.completion ? "complete" : ""}">
@@ -288,16 +285,53 @@ function questCard(goal, index, weekly) {
       <h3>${escapeHtml(title)}</h3>
       <p class="muted">${escapeHtml(reason)}</p>
       <div class="progress-copy">
-        <span>${weekly ? "Current Streak" : "Progress"}</span>
+        <span>${weekly ? "Weekly Tracker" : "Progress"}</span>
         <span>${progressLabel}</span>
       </div>
       <div class="progress-track" style="--progress:${progressValue}"><span></span></div>
-      <label class="quest-completion">
+      ${weekly ? `
+        <p class="quest-tracker-note">Updates when you finish linked daily quests.</p>
+      ` : `<label class="quest-completion">
         <input type="checkbox" data-quest-id="${escapeHtml(goal.id || "")}" ${checked} ${disabled}>
         <span>Done?</span>
-      </label>
+      </label>`}
     </article>
   `;
+}
+
+function linkedWeeklyProgress(weeklyGoal) {
+  const dailyGoals = asArray(state.analysis?.["daily goals"], fallbackDailyGoals);
+  const linkedDailyGoals = dailyGoals.filter((goal) => sameQuestCategory(goal.category, weeklyGoal.category));
+  const total = weeklyTargetForCategory(weeklyGoal.category);
+  const completed = Math.min(total, linkedDailyGoals.filter((goal) => goal.completion).length);
+  const noun = categoryUnit(weeklyGoal.category);
+  const progress = Math.min(100, Math.round((completed / total) * 100));
+  return {
+    label: `${completed} / ${total} ${noun} saved`,
+    progress: `${progress}%`
+  };
+}
+
+function sameQuestCategory(left, right) {
+  return String(left || "").trim().toLowerCase() === String(right || "").trim().toLowerCase();
+}
+
+function weeklyTargetForCategory(category) {
+  const text = String(category || "").toLowerCase();
+  if (text.includes("coffee")) return 3;
+  if (text.includes("eating") || text.includes("restaurant")) return 2;
+  if (text.includes("transport") || text.includes("rideshare")) return 2;
+  if (text.includes("subscription")) return 1;
+  return 3;
+}
+
+function categoryUnit(category) {
+  const text = String(category || "").toLowerCase();
+  if (text.includes("coffee")) return "coffees";
+  if (text.includes("eating") || text.includes("restaurant")) return "meals";
+  if (text.includes("transport") || text.includes("rideshare")) return "rides";
+  if (text.includes("subscription")) return "checks";
+  return "wins";
 }
 
 function bindQuestCompletionEvents() {
@@ -310,12 +344,19 @@ function bindQuestCompletionEvents() {
       try {
         const response = await fetch(`/api/quests/${encodeURIComponent(questId)}`, {
           method: "PATCH",
-          headers: { "content-type": "application/json" },
+          headers: authHeaders(),
           body: JSON.stringify({ completion: checkbox.checked })
         });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "Could not update quest");
         updateLocalQuestCompletion(questId, Boolean(payload.quest?.completion));
+        if (payload.totalSavedLittleWins !== null && payload.totalSavedLittleWins !== undefined) {
+          state.totalSavedLittleWins = Number(payload.totalSavedLittleWins || 0);
+          if (state.session?.user) {
+            state.session.user.Total_saved_littlewins = state.totalSavedLittleWins;
+            localStorage.setItem("little-wins-session", JSON.stringify(state.session));
+          }
+        }
         renderQuests();
         renderTotalSaved();
       } catch (error) {
@@ -336,14 +377,7 @@ function updateLocalQuestCompletion(questId, completion) {
 }
 
 function renderTotalSaved() {
-  const goalSavings = state.goals.reduce((total, goal) => total + Number(goal.saved || 0), 0);
-  const completedQuestSavings = ["daily goals", "weekly goals"].reduce((total, group) => {
-    const quests = asArray(state.analysis?.[group], []);
-    return total + quests
-      .filter((quest) => quest.completion)
-      .reduce((sum, quest) => sum + Number(quest.saving || 0), 0);
-  }, 0);
-  elements.totalSaved.textContent = formatMoney(goalSavings + completedQuestSavings);
+  elements.totalSaved.textContent = formatMoney(state.totalSavedLittleWins);
 }
 
 async function analyseSpending() {
@@ -463,6 +497,7 @@ async function loadUserGoals() {
   try {
     const payload = await apiFetch("/api/user-goals");
     state.goals = payload.goals?.length ? payload.goals : [];
+    state.totalSavedLittleWins = Number(payload.totalSavedLittleWins || 0);
     saveGoals();
   } catch (error) {
     setAnalysisStatus(error.message);
@@ -568,9 +603,9 @@ function loadSession() {
 
 function loadGoals() {
   try {
-    return JSON.parse(localStorage.getItem("little-wins-goals")) || defaultGoals;
+    return JSON.parse(localStorage.getItem("little-wins-goals")) || [];
   } catch {
-    return defaultGoals;
+    return [];
   }
 }
 
