@@ -338,6 +338,7 @@ async function saveUserGoal({ authUserId, email, fullName, goalName, goalAmount,
   if (!Array.isArray(user.savings_goal_allocation)) user.savings_goal_allocation = [];
   user.savings_goal_allocation.unshift(0);
   user.savings_goal_allocation = defaultGoalAllocations(user.savings_goal_amount);
+  goal.allocation = user.savings_goal_allocation[0] ?? 100;
   user.updated_at = new Date().toISOString();
   await writeLocalUsersDb(db);
   await syncUserToSupabase(user);
@@ -1032,6 +1033,8 @@ function normalizeGoalLists(user) {
     savings_goal_saved: [],
     savings_goal_allocation: []
   };
+  const seenGoals = new Set();
+  const seenGoalValues = new Set();
 
   for (let index = 0; index < goalCount; index += 1) {
     const name = String(names[index] || "").trim();
@@ -1039,7 +1042,13 @@ function normalizeGoalLists(user) {
     const saved = toMoneyNumber(savedAmounts[index]);
     if (!name && amount === 0 && saved === 0) continue;
 
-    goals.savings_goal_id.push(String(ids[index] || randomUUID()));
+    const id = String(ids[index] || randomUUID());
+    const valueKey = `${(name || "Savings goal").toLowerCase()}|${amount}|${saved}`;
+    if (seenGoals.has(id) || seenGoalValues.has(valueKey)) continue;
+    seenGoals.add(id);
+    seenGoalValues.add(valueKey);
+
+    goals.savings_goal_id.push(id);
     goals.savings_goal_name.push(name || "Savings goal");
     goals.savings_goal_amount.push(amount);
     goals.savings_goal_saved.push(saved);

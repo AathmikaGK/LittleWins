@@ -92,7 +92,8 @@ function bindEvents() {
       state.editingGoalId = null;
     } else {
       const goal = await saveGoalToApi(goalInput);
-      state.goals = [goal || { ...goalInput, id: crypto.randomUUID(), icon: "savings" }, ...state.goals];
+      const savedGoal = goal || { ...goalInput, id: crypto.randomUUID(), icon: "savings" };
+      state.goals = [savedGoal, ...state.goals.filter((item) => String(item.id) !== String(savedGoal.id))];
       state.goals = defaultGoalAllocations(state.goals);
     }
     state.goals = ensureGoalAllocations(state.goals);
